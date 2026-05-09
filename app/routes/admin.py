@@ -157,30 +157,39 @@ def delete_movie(mid):
 
 # ── TMDB sync endpoints ───────────────────────────────────────────────────────
 
+def _movie_service():
+    """Return whichever movie service has its API key configured."""
+    import os
+    from app.services import omdb_service, tmdb_service
+    if os.environ.get("TMDB_API_KEY", "").strip():
+        return tmdb_service
+    return omdb_service
+
+
 @admin_bp.route('/sync-tmdb', methods=['POST'])
 @admin_required
 def sync_tmdb():
     """
-    Trigger a background TMDB sync for every movie in the DB that has a tmdb_id.
-    Returns immediately with a 202 Accepted response; the sync runs in a daemon
-    thread so the HTTP connection is not held open.
+    Trigger a background sync for every movie in the DB.
+    Uses TMDB if TMDB_API_KEY is set, otherwise falls back to OMDb.
+    Returns 202 immediately; sync runs in a daemon thread.
     """
     import threading
     from flask import current_app
-    from app.services import tmdb_service
 
+    svc = _movie_service()
     app = current_app._get_current_object()
 
     def _run():
         with app.app_context():
-            result = tmdb_service.sync_all_movies()
+            result = svc.sync_all_movies()
             app.logger.info("sync_all_movies finished: %s", result)
 
-    thread = threading.Thread(target=_run, daemon=True, name="tmdb-sync")
+    thread = threading.Thread(target=_run, daemon=True, name="movie-sync")
     thread.start()
 
     return jsonify({
-        'message': 'TMDB sync started in background',
+        'message': 'Movie sync started in background',
         'status':  'accepted',
     }), 202
 
@@ -189,11 +198,11 @@ def sync_tmdb():
 @admin_required
 def fetch_popular():
     """
-    Fetch popular movies from TMDB and add any that are not already in the DB.
+    Fetch popular movies and add any not already in the DB.
     Accepts an optional JSON body ``{"pages": N}`` (default 3).
     Runs synchronously and returns the result summary when done.
     """
-    from app.services import tmdb_service
+    svc = _movie_service()
 
     data  = request.get_json(silent=True) or {}
     pages = int(data.get('pages', 3))
@@ -202,7 +211,7 @@ def fetch_popular():
     if pages > 20:
         pages = 20
 
-    result = tmdb_service.fetch_popular_movies(pages=pages)
+    result = svc.fetch_popular_movies(pages=pages)
 
     if 'error' in result:
         return jsonify({'error': result['error']}), 503
